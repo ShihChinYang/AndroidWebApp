@@ -1,9 +1,12 @@
 package com.example.mywebview
 
+import android.content.Context
 import android.content.pm.PackageManager
+import android.content.res.AssetManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.webkit.MimeTypeMap
 import android.webkit.ServiceWorkerClient
 import android.webkit.ServiceWorkerController
 import android.webkit.ValueCallback
@@ -17,6 +20,8 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.annotation.NonNull
+import androidx.annotation.Nullable
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -27,10 +32,12 @@ import androidx.core.content.ContextCompat
 import androidx.webkit.WebViewAssetLoader
 import androidx.webkit.WebViewAssetLoader.AssetsPathHandler
 import com.example.mywebview.ui.theme.MyWebViewTheme
+import java.io.FileInputStream
+import java.io.InputStream
+import java.security.AccessController.getContext
 
 
 const val PAGE_URL = "https://android.bsafes.com/logIn.html"
-
 
 
 class MainActivity : ComponentActivity() {
@@ -106,7 +113,7 @@ fun WebViewScreen(customWebChromeClient: WebChromeClient) {
         factory = { context ->
             val assetLoader = WebViewAssetLoader.Builder()
                 .setDomain("android.bsafes.com")
-                .addPathHandler("/", AssetsPathHandler(context))
+                .addPathHandler("/", myPathHandler(context))
                 .build()
             val swController = ServiceWorkerController.getInstance()
             val serviceWorkerClient = object: ServiceWorkerClient() {
@@ -143,4 +150,17 @@ fun WebViewScreen(customWebChromeClient: WebChromeClient) {
             it.loadUrl(PAGE_URL)
         }
     )
+}
+
+class myPathHandler(context: Context) : WebViewAssetLoader.PathHandler {
+    private val assetManager: AssetManager = context.getAssets()
+    override fun handle(path: String): WebResourceResponse? {
+        val extension: String = MimeTypeMap.getFileExtensionFromUrl(path)
+        val mimeType: String? = MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension)
+        try {
+            return WebResourceResponse(mimeType, "UTF-8", assetManager.open(path))
+        } catch(e: Exception) {
+            return return WebResourceResponse("text/html", "UTF-8", assetManager.open("404.html"))
+        }
+    }
 }
