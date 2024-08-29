@@ -20,27 +20,34 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.annotation.NonNull
-import androidx.annotation.Nullable
+import androidx.camera.core.Preview
+import androidx.camera.lifecycle.ProcessCameraProvider
+import androidx.camera.view.LifecycleCameraController
+import androidx.camera.view.PreviewView
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.compose.ui.tooling.PreviewActivity
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.webkit.WebViewAssetLoader
-import androidx.webkit.WebViewAssetLoader.AssetsPathHandler
 import com.example.mywebview.ui.theme.MyWebViewTheme
-import java.io.FileInputStream
-import java.io.InputStream
-import java.security.AccessController.getContext
-
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 
 const val PAGE_URL = "https://android.bsafes.com/logIn.html"
 
-
 class MainActivity : ComponentActivity() {
+    // Key Point: Managing Camera Permission State
+    private val _isCameraPermissionGranted = MutableStateFlow(false)
+    val isCameraPermissionGranted: StateFlow<Boolean> = _isCameraPermissionGranted
+
     private val webChromeClient = object: WebChromeClient() {
         private var fileUploadCallback: ValueCallback<Array<Uri>>? = null
         override fun onShowFileChooser(
@@ -65,7 +72,7 @@ class MainActivity : ComponentActivity() {
             return true
         }
     }
-    private var requiredPermissions = arrayOf(android.Manifest.permission.CAMERA, android.Manifest.permission.RECORD_AUDIO)
+    private var requiredPermissions = arrayOf(android.Manifest.permission.CAMERA)
     private val requestPermissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions())
         { permissions  ->
@@ -92,9 +99,15 @@ class MainActivity : ComponentActivity() {
 
         enableEdgeToEdge()
         setContent {
+            // Collect the camera permission state as a Compose state to automatically update the UI upon change
+            val permissionGranted = isCameraPermissionGranted.collectAsState().value
             MyWebViewTheme {
                 Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
-                    WebViewScreen(webChromeClient)
+                    if (permissionGranted) {
+                        CameraPreview()
+                    } else {
+                        WebViewScreen(webChromeClient)
+                    }
                 }
             }
         }
@@ -103,7 +116,20 @@ class MainActivity : ComponentActivity() {
         requestPermissionLauncher.launch(requiredPermissions)
     }
     private fun startCamera() {
+        _isCameraPermissionGranted.value = true
+    }
+}
 
+class myPathHandler(context: Context) : WebViewAssetLoader.PathHandler {
+    private val assetManager: AssetManager = context.getAssets()
+    override fun handle(path: String): WebResourceResponse? {
+        val extension: String = MimeTypeMap.getFileExtensionFromUrl(path)
+        val mimeType: String? = MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension)
+        try {
+            return WebResourceResponse(mimeType, "UTF-8", assetManager.open(path))
+        } catch(e: Exception) {
+            return return WebResourceResponse("text/html", "UTF-8", assetManager.open("404.html"))
+        }
     }
 }
 
@@ -152,15 +178,32 @@ fun WebViewScreen(customWebChromeClient: WebChromeClient) {
     )
 }
 
-class myPathHandler(context: Context) : WebViewAssetLoader.PathHandler {
-    private val assetManager: AssetManager = context.getAssets()
-    override fun handle(path: String): WebResourceResponse? {
-        val extension: String = MimeTypeMap.getFileExtensionFromUrl(path)
-        val mimeType: String? = MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension)
-        try {
-            return WebResourceResponse(mimeType, "UTF-8", assetManager.open(path))
-        } catch(e: Exception) {
-            return return WebResourceResponse("text/html", "UTF-8", assetManager.open("404.html"))
+@Composable
+fun CameraPreview() {
+    // Obtain the current context and lifecycle owner
+    val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
+
+    // Remember a LifecycleCameraController for this composable
+    val cameraController = remember {
+        LifecycleCameraController(context).apply {
+            // Bind the LifecycleameraController to the lifecycleOwner
+            bindToLifecycle(lifecycleOwner)
         }
     }
+
+    AndroidView(modifier = Modifier.fillMaxSize(),
+        factory = { ctx ->
+            //Initialize the PreviewView and configure it
+            PreviewView(ctx).apply {
+                scaleType = PreviewView.ScaleType.FILL_START
+                implementationMode = PreviewView.ImplementationMode.COMPATIBLE
+                controller = cameraController
+            }
+        },
+        onRelease = {
+            // Release the camera controler when the composable is removed from the screen
+            cameraController.unbind()
+        }
+    )
 }
