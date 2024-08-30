@@ -3,9 +3,14 @@ package com.example.mywebview
 import android.content.Context
 import android.content.pm.PackageManager
 import android.content.res.AssetManager
+import android.graphics.Bitmap
+import android.graphics.Color
+import android.graphics.ImageDecoder
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.provider.MediaStore
+import android.view.ViewGroup.LayoutParams.MATCH_PARENT
 import android.webkit.MimeTypeMap
 import android.webkit.ServiceWorkerClient
 import android.webkit.ServiceWorkerController
@@ -15,36 +20,69 @@ import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.widget.LinearLayout
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.camera.core.Preview
-import androidx.camera.lifecycle.ProcessCameraProvider
+import androidx.camera.core.CameraSelector
+import androidx.camera.core.ImageCapture
+import androidx.camera.core.ImageCapture.OnImageSavedCallback
+import androidx.camera.core.ImageCaptureException
 import androidx.camera.view.LifecycleCameraController
 import androidx.camera.view.PreviewView
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.graphics.RectangleShape
+import androidx.compose.ui.input.pointer.PointerIcon.Companion.Text
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
-import androidx.compose.ui.tooling.PreviewActivity
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
+import androidx.core.net.toFile
 import androidx.webkit.WebViewAssetLoader
 import com.example.mywebview.ui.theme.MyWebViewTheme
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import java.io.File
+import java.io.FileOutputStream
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 const val PAGE_URL = "https://android.bsafes.com/logIn.html"
 
 class MainActivity : ComponentActivity() {
     // Key Point: Managing Camera Permission State
+
     private val _isCameraPermissionGranted = MutableStateFlow(false)
     val isCameraPermissionGranted: StateFlow<Boolean> = _isCameraPermissionGranted
 
@@ -104,7 +142,7 @@ class MainActivity : ComponentActivity() {
             MyWebViewTheme {
                 Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
                     if (permissionGranted) {
-                        CameraPreview()
+                        CameraView()
                     } else {
                         WebViewScreen(webChromeClient)
                     }
@@ -122,13 +160,13 @@ class MainActivity : ComponentActivity() {
 
 class myPathHandler(context: Context) : WebViewAssetLoader.PathHandler {
     private val assetManager: AssetManager = context.getAssets()
-    override fun handle(path: String): WebResourceResponse? {
+    override fun handle(path: String): WebResourceResponse {
         val extension: String = MimeTypeMap.getFileExtensionFromUrl(path)
         val mimeType: String? = MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension)
         try {
             return WebResourceResponse(mimeType, "UTF-8", assetManager.open(path))
         } catch(e: Exception) {
-            return return WebResourceResponse("text/html", "UTF-8", assetManager.open("404.html"))
+            return WebResourceResponse("text/html", "UTF-8", assetManager.open("404.html"))
         }
     }
 }
@@ -179,7 +217,7 @@ fun WebViewScreen(customWebChromeClient: WebChromeClient) {
 }
 
 @Composable
-fun CameraPreview() {
+fun CameraView(onImageCatpureed: (imageFile: File, uri: Uri) -> Unit) {
     // Obtain the current context and lifecycle owner
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -192,18 +230,248 @@ fun CameraPreview() {
         }
     }
 
-    AndroidView(modifier = Modifier.fillMaxSize(),
-        factory = { ctx ->
-            //Initialize the PreviewView and configure it
-            PreviewView(ctx).apply {
-                scaleType = PreviewView.ScaleType.FILL_START
-                implementationMode = PreviewView.ImplementationMode.COMPATIBLE
-                controller = cameraController
+    val lensFacing = remember {
+        mutableStateOf(CameraSelector.LENS_FACING_BACK)
+    }
+    var imageTakenUri = remember {
+        mutableStateOf(Uri.EMPTY)
+    }
+    // We always need to build the camera selector again if the user changes the camera len's
+    val cameraSelector = remember(lensFacing.value) {
+        CameraSelector.Builder().requireLensFacing(lensFacing.value).build()
+    }
+    // We also need to pass this cameraSelector to the cameraController instance
+
+    // We need to pass this flashMode to our cameraController
+    val flashMode = remember {
+        mutableStateOf(ImageCapture.FLASH_MODE_OFF)
+    }
+    var flashLightContentDescription = ""
+    if(flashMode.value == ImageCapture.FLASH_MODE_ON)
+        flashLightContentDescription = "Flashlight is ON"
+    else
+        flashLightContentDescription = "Flashlight is Off"
+
+    Scaffold(modifier = Modifier.fillMaxSize(),
+        bottomBar = {
+            Row(
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                if (imageTakenUri.value == Uri.EMPTY ) {
+                    Row(modifier = Modifier
+                        .fillMaxWidth()
+                        .background(
+                            color = androidx.compose.ui.graphics.Color.Black,
+                            shape = RectangleShape
+                        )
+                        .padding(30.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Image(
+                            painter = painterResource(
+                                id =
+                                if (flashMode.value == ImageCapture.FLASH_MODE_OFF )
+                                    R.drawable.flashlightoff
+                                else
+                                    R.drawable.flashlighton
+                            ),
+                            modifier = Modifier
+                                .width(25.dp)
+                                .height(30.dp)
+                                .clickable {
+                                    if(flashMode.value == ImageCapture.FLASH_MODE_ON)
+                                        flashMode.value == ImageCapture.FLASH_MODE_OFF
+                                    else
+                                        flashMode.value == ImageCapture.FLASH_MODE_ON
+                                },
+                            contentDescription = flashLightContentDescription,
+                            contentScale = ContentScale.FillBounds
+                        )
+                        Image(
+                            painter = painterResource(
+                                id = R.drawable.take_photo
+                            ),
+                            modifier = Modifier
+                                .size(62.dp)
+                                .clickable {
+                                    takePhoto(
+                                        cameraController = cameraController,
+                                        context = context,
+                                        onImageCatpureed = { uri: Uri ->
+                                            imageTakenUri.value = uri
+                                        }
+                                    )
+                                },
+                            contentDescription = "Take Photo",
+                            contentScale = ContentScale.FillBounds
+                        )
+                        Image(
+                            painter = painterResource(
+                                id = R.drawable.switch_camera
+                            ),
+                            modifier = Modifier
+                                .width(32.dp)
+                                .height(30.dp)
+                                .clickable {
+                                    if (lensFacing.value == CameraSelector.LENS_FACING_FRONT) {
+                                        lensFacing.value = CameraSelector.LENS_FACING_BACK
+                                    } else {
+                                        lensFacing.value = CameraSelector.LENS_FACING_FRONT
+                                    }
+                                },
+                            contentDescription = "Switch Camera",
+                            contentScale = ContentScale.FillBounds
+                        )
+                    }
+                } else {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(bottom = 25.dp),
+                        horizontalArrangement = Arrangement.SpaceAround,
+                        verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(
+                                horizontalAlignment = Alignment.CenterHorizontally
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(70.dp)
+                                        .clip(shape = CircleShape )
+                                        .background(color = androidx.compose.ui.graphics.Color(0xffedbb99 )),
+                                    contentAlignment = Alignment.Center
+                                ){
+                                    Image(
+                                        painter = painterResource(
+                                            id = R.drawable.retake
+                                        ),
+                                        modifier = Modifier
+                                            .width(30.dp)
+                                            .height(30.dp)
+                                            .clickable {
+                                                if(imageTakenUri.value != Uri.EMPTY) {
+                                                    imageTakenUri.value.toFile().delete()
+                                                    imageTakenUri.value = Uri.EMPTY
+                                                }
+                                            },
+                                        contentDescription = "Retake Photo",
+                                        contentScale = ContentScale.FillBounds
+                                    )
+                                    Text(
+                                        text="Retake",
+                                        modifier = Modifier.padding(top = 8.dp)
+                                    )
+                                }
+                            }
+                            Column(
+                                horizontalAlignment = Alignment.CenterHorizontally
+                            ){
+                                Box(
+                                    modifier = Modifier
+                                        .size(70.dp)
+                                        .background(
+                                            color = androidx.compose.ui.graphics.Color(0x00ffffff)
+                                        ),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Image(
+                                        painter = painterResource(
+                                            id = R.drawable.tick
+                                        ),
+                                        colorFilter = ColorFilter.tint(androidx.compose.ui.graphics.Color.White),
+                                        modifier = Modifier
+                                            .width(23.dp)
+                                            .height(16.dp)
+                                            .clickable {
+                                                val uri = imageTakenUri.value
+                                                if (uri != null) {
+                                                    val imageFile =
+                                                }
+                                            },
+                                        contentDescription = "Retake Photo",
+                                        contentScale = ContentScale.FillBounds
+                                    )
+                                }
+
+                            }
+                    }
+
+                }
             }
-        },
-        onRelease = {
-            // Release the camera controler when the composable is removed from the screen
-            cameraController.unbind()
-        }
+
+        }) { innerPadding ->
+        AndroidView(modifier = Modifier.fillMaxSize().padding(innerPadding),
+            factory = { ctx ->
+                //Initialize the PreviewView and configure it
+                PreviewView(ctx).apply {
+                    layoutParams = LinearLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT)
+                    setBackgroundColor(Color.BLACK)
+                    scaleType = PreviewView.ScaleType.FILL_START
+                    implementationMode = PreviewView.ImplementationMode.COMPATIBLE
+                    controller = cameraController
+                }.also { previewView ->
+                    cameraController.imageCaptureFlashMode = flashMode.value
+                    cameraController.cameraSelector = cameraSelector
+                }
+            },
+            onRelease = {
+                // Release the camera controler when the composable is removed from the screen
+                cameraController.unbind()
+            },
+            update = {
+                cameraController.cameraSelector = cameraSelector
+            }
+        )
+
+    }
+
+}
+
+private fun takePhoto(cameraController: LifecycleCameraController,
+                      context: Context,
+                      onImageCatpureed: (uri:Uri) -> Unit
+) {
+    val imageFile = File.createTempFile(
+        SimpleDateFormat(
+            "yyyy-MM-dd-HH-mm-ss-SSS",
+            Locale.US
+        ).format(System.currentTimeMillis()), ".jpg"
     )
+    val outputFileOptions = ImageCapture.OutputFileOptions.Builder(imageFile).build()
+    val mainExecutor = ContextCompat.getMainExecutor(context)
+    cameraController.takePicture(outputFileOptions, mainExecutor, object: OnImageSavedCallback {
+        override fun onImageSaved(outputFileResults: ImageCapture.OutputFileResults) {
+            val savedUri = Uri.fromFile(imageFile)
+            onImageCatpureed(savedUri)
+        }
+
+        override fun onError(exception: ImageCaptureException) {
+            print("exception arises on saving a captured image in temp file")
+        }
+    })
+}
+
+fun getImageFileInPngFormat(uri: Uri, context: Context) : File {
+    var bitmap: Bitmap? = null
+    if(Build.VERSION.SDK_INT < 28) {
+        bitmap = MediaStore.Images.Media.getBitmap(context.contentResolver, uri)
+    } else {
+        val source = ImageDecoder.createSource(context.contentResolver, uri)
+        bitmap = ImageDecoder.decodeBitmap(source)
+    }
+    val timeStamp: String = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(
+        Date()
+    )
+    val storageDir: File? = context.getExternalFilesDir(null)
+    val file = File.createTempFile(
+        "PNG_${timeStamp}_",
+        ".png",
+        storageDir
+    )
+    FileOutputStream(file).use { out ->
+        bitmap?.compress(Bitmap.CompressFormat.JPEG, 100, out)
+        out.flush()
+    }
+    return file
 }
