@@ -162,9 +162,16 @@ class myPathHandler(context: Context) : WebViewAssetLoader.PathHandler {
     private val assetManager: AssetManager = context.getAssets()
     override fun handle(path: String): WebResourceResponse {
         val extension: String = MimeTypeMap.getFileExtensionFromUrl(path)
-        val mimeType: String? = MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension)
+        var mimeType: String?
+        if(extension == "js"){
+            mimeType = "text/javascript"
+        } else {
+            mimeType = MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension)
+        }
+
         try {
-            return WebResourceResponse(mimeType, "UTF-8", assetManager.open(path))
+            val response = WebResourceResponse(mimeType, "UTF-8", assetManager.open(path))
+            return response
         } catch(e: Exception) {
             return WebResourceResponse("text/html", "UTF-8", assetManager.open("404.html"))
         }
@@ -204,7 +211,13 @@ fun WebViewScreen(customWebChromeClient: WebChromeClient) {
                         view: WebView,
                         request: WebResourceRequest
                     ): WebResourceResponse? {
-                        return assetLoader.shouldInterceptRequest(request.url)
+                        val interceptedWebResponse = assetLoader.shouldInterceptRequest(request.url)
+                        interceptedWebResponse?.let {
+                            if(request.url.toString().endsWith("js", true)) {
+                                it.mimeType = "text/javascript"
+                            }
+                        }
+                        return interceptedWebResponse
                     }
                 }
                 webChromeClient = customWebChromeClient
@@ -217,7 +230,7 @@ fun WebViewScreen(customWebChromeClient: WebChromeClient) {
 }
 
 @Composable
-fun CameraView(onImageCatpureed: (imageFile: File, uri: Uri) -> Unit) {
+fun CameraView(/*onImageCatpureed: (imageFile: File, uri: Uri) -> Unit*/) {
     // Obtain the current context and lifecycle owner
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -229,7 +242,7 @@ fun CameraView(onImageCatpureed: (imageFile: File, uri: Uri) -> Unit) {
             bindToLifecycle(lifecycleOwner)
         }
     }
-
+/*
     val lensFacing = remember {
         mutableStateOf(CameraSelector.LENS_FACING_BACK)
     }
@@ -400,8 +413,8 @@ fun CameraView(onImageCatpureed: (imageFile: File, uri: Uri) -> Unit) {
                 }
             }
 
-        }) { innerPadding ->
-        AndroidView(modifier = Modifier.fillMaxSize().padding(innerPadding),
+        }) { innerPadding -> */
+        AndroidView(modifier = Modifier.fillMaxSize(),
             factory = { ctx ->
                 //Initialize the PreviewView and configure it
                 PreviewView(ctx).apply {
@@ -410,21 +423,21 @@ fun CameraView(onImageCatpureed: (imageFile: File, uri: Uri) -> Unit) {
                     scaleType = PreviewView.ScaleType.FILL_START
                     implementationMode = PreviewView.ImplementationMode.COMPATIBLE
                     controller = cameraController
-                }.also { previewView ->
+                }/*.also { previewView ->
                     cameraController.imageCaptureFlashMode = flashMode.value
                     cameraController.cameraSelector = cameraSelector
-                }
+                }*/
             },
             onRelease = {
                 // Release the camera controler when the composable is removed from the screen
                 cameraController.unbind()
             },
             update = {
-                cameraController.cameraSelector = cameraSelector
+                //cameraController.cameraSelector = cameraSelector
             }
         )
 
-    }
+    //}
 
 }
 
